@@ -9,11 +9,11 @@ RUN go get -u
 RUN CGO_ENABLED=0 go build -o /tmp/prometheus_remote_kinesis .
 
 ### docker image
-FROM empty
+FROM alpine:3.7
+
+RUN apk add --no-cache ca-certificates
 
 COPY --from=build-env /tmp/prometheus_remote_kinesis /prometheus_remote_kinesis
-
-ADD ca-certificates.crt /etc/ssl/certs/
 
 ENV AWS_REGION ap-northeast-1
 ARG STREAM_NAME
