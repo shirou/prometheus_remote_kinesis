@@ -18,4 +18,4 @@ COPY --from=build-env /tmp/prometheus_remote_kinesis /prometheus_remote_kinesis
 ENV AWS_REGION ap-northeast-1
 ARG STREAM_NAME
 
-CMD ["/prometheus_remote_kinesis", "-stream-name", $STREAM_NAME]
+CMD /prometheus_remote_kinesis -stream-name $STREAM_NAME
