@@ -5,14 +5,24 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"math"
+	"net/http"
+	"os"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/kinesis"
+	"github.com/gogo/protobuf/proto"
+	"github.com/golang/snappy"
+	"github.com/prometheus/common/model"
+	"github.com/prometheus/prometheus/prompb"
 	"go.uber.org/zap"
 )
 
 const MaxNumberOfBuffer = 1000
+const DefaultAWSRegion = "ap-northeast-1"
 
 type Config struct {
 	streamName string
@@ -30,7 +40,11 @@ func newWriter(config Config) *kinesisWriter {
 	if config.AWSRegion != "" {
 		awsConfig = awsConfig.WithRegion(config.AWSRegion)
 	} else {
-		awsConfig = awsConfig.WithRegion("ap-northeast-1")
+		awsConfig = awsConfig.WithRegion(DefaultAWSRegion)
+	}
+	if os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_SECRET_ACCESS_KEY") != "" {
+		cred := credentials.NewEnvCredentials()
+		awsConfig = awsConfig.WithCredentials(cred)
 	}
 
 	svc := session.Must(session.NewSessionWithOptions(session.Options{
@@ -46,6 +60,55 @@ func newWriter(config Config) *kinesisWriter {
 	go w.run()
 
 	return &w
+}
+
+func (writer *kinesisWriter) receive(w http.ResponseWriter, r *http.Request) {
+	compressed, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		logger.Error("read failed", zap.NamedError("error", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	reqBuf, err := snappy.Decode(nil, compressed)
+	if err != nil {
+		logger.Error("decode failed", zap.NamedError("error", err))
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var req prompb.WriteRequest
+	if err := proto.Unmarshal(reqBuf, &req); err != nil {
+		logger.Error("unmarshal failed", zap.NamedError("error", err))
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	records := make(Records, 0, len(req.Timeseries))
+	for _, ts := range req.Timeseries {
+		var r Record
+		m := make(Labels, len(ts.Labels))
+		for _, l := range ts.Labels {
+			m[string(model.LabelName(l.Name))] = string(model.LabelValue(l.Value))
+		}
+		r.Labels = m
+		r.Name = m["__name__"]
+		if len(ts.Samples) == 0 {
+			records = append(records, r)
+			continue
+		}
+		// flatten for each ts.Samples
+		for _, s := range ts.Samples {
+			r2 := r
+			r2.Timestamp = s.Timestamp
+			if !math.IsNaN(s.Value) {
+				r2.Value = s.Value
+			}
+			records = append(records, r2)
+		}
+	}
+
+	writer.writeCh <- records
 }
 
 func (w *kinesisWriter) run() {

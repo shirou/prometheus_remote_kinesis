@@ -1,7 +1,7 @@
 ### build stage
 FROM golang:alpine AS build-env
 
-RUN	apk add --no-cache git
+RUN apk add --no-cache git
 ADD . /go/src/github.com/shirou/prometheus_remote_kinesis
 WORKDIR /go/src/github.com/shirou/prometheus_remote_kinesis
 RUN go get -u
