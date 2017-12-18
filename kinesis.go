@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"math"
 	"net/http"
@@ -136,8 +135,7 @@ func (w *kinesisWriter) write(records Records, svc *kinesis.Kinesis) error {
 			logger.Error("marshal error", zap.NamedError("error", err))
 			continue
 		}
-		fmt.Println(string(j))
-
+		logger.Debug(string(j))
 		// compress to gzip
 		var b bytes.Buffer
 		w := gzip.NewWriter(&b)
