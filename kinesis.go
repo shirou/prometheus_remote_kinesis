@@ -135,7 +135,6 @@ func (w *kinesisWriter) write(records Records, svc *kinesis.Kinesis) error {
 			logger.Error("marshal error", zap.NamedError("error", err))
 			continue
 		}
-		logger.Debug(string(j))
 		// compress to gzip
 		var b bytes.Buffer
 		w := gzip.NewWriter(&b)
