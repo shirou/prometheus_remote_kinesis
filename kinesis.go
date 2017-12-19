@@ -118,6 +118,10 @@ func (writer *kinesisWriter) receive(w http.ResponseWriter, r *http.Request) {
 	writer.writeCh <- records
 }
 
+func (w *kinesisWriter) close() {
+	close(w.writeCh)
+}
+
 func (w *kinesisWriter) run() {
 	rs := make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
 	var bytes int
@@ -127,20 +131,18 @@ func (w *kinesisWriter) run() {
 	for {
 		select {
 		case <-ticker.C:
-			if len(rs) > 0 {
-				w.mutex.Lock()
-				if err := w.send(rs, w.svc); err != nil {
-					logger.Error("send failed", zap.NamedError("error", err))
-				}
-				bytes = 0
-				rs = make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
-				w.mutex.Unlock()
+			w.mutex.Lock()
+			if err := w.send(rs, w.svc); err != nil {
+				logger.Error("send failed", zap.NamedError("error", err))
 			}
+			bytes = 0
+			rs = make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
+			w.mutex.Unlock()
 		case records, ok := <-w.writeCh:
 			if !ok {
 				logger.Warn("write channel closed. send current buffer")
 				if err := w.send(rs, w.svc); err != nil {
-					logger.Error("write failed", zap.NamedError("error", err))
+					logger.Error("send failed", zap.NamedError("error", err))
 				}
 				return
 			}
@@ -202,6 +204,9 @@ func (w *kinesisWriter) write(records Records) ([]*kinesis.PutRecordsRequestEntr
 }
 
 func (w *kinesisWriter) send(entries []*kinesis.PutRecordsRequestEntry, svc *kinesis.Kinesis) error {
+	if len(entries) == 0 {
+		return nil
+	}
 	input := &kinesis.PutRecordsInput{
 		Records:    entries,
 		StreamName: aws.String(w.streamName),
