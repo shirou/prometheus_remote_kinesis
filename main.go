@@ -4,6 +4,7 @@ import (
 	"flag"
 	"net/http"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -50,10 +51,10 @@ func initLogger() {
 
 func main() {
 	var (
-		streamName = flag.String("stream-name", "", "Kinesis stream name")
-		listenAddr = flag.String("listen-addr", ":9501", "The address to listen on.")
-		aws_region = flag.String("region", os.Getenv("AWS_REGION"), "AWS region name")
-		//		checkpointInterval = flag.Duration("checkpoint-interval", 5*time.Second, "The interval between checkpoints.")
+		streamName    = flag.String("stream-name", "", "Kinesis stream name")
+		listenAddr    = flag.String("listen-addr", ":9501", "The address to listen on.")
+		aws_region    = flag.String("region", os.Getenv("AWS_REGION"), "AWS region name")
+		writeInterval = flag.Duration("write-interval", 10*time.Second, "The interval between write.")
 	)
 	flag.Parse()
 
@@ -61,8 +62,9 @@ func main() {
 		logger.Fatal("stream-name option is required")
 	}
 	config := Config{
-		streamName: *streamName,
-		AWSRegion:  *aws_region,
+		streamName:    *streamName,
+		writeInterval: *writeInterval,
+		AWSRegion:     *aws_region,
 	}
 
 	logger.Info("starting prometheus_remote_kinesis", zap.String("stream-name", *streamName))

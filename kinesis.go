@@ -8,6 +8,8 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -21,17 +23,22 @@ import (
 )
 
 const MaxNumberOfBuffer = 1000
+const MaxPutRecordsSize = 4500000 // 5MB
+const MaxPutRecordsEntries = 500
 const DefaultAWSRegion = "ap-northeast-1"
 
 type Config struct {
-	streamName string
-	AWSRegion  string
+	streamName    string
+	writeInterval time.Duration
+	AWSRegion     string
 }
 
 type kinesisWriter struct {
-	svc        *kinesis.Kinesis
-	streamName string
-	writeCh    chan Records
+	svc           *kinesis.Kinesis
+	writeInterval time.Duration
+	streamName    string
+	writeCh       chan Records
+	mutex         sync.Mutex
 }
 
 func newWriter(config Config) *kinesisWriter {
@@ -51,9 +58,10 @@ func newWriter(config Config) *kinesisWriter {
 	}))
 
 	w := kinesisWriter{
-		streamName: config.streamName,
-		svc:        kinesis.New(svc),
-		writeCh:    make(chan Records, MaxNumberOfBuffer),
+		streamName:    config.streamName,
+		svc:           kinesis.New(svc),
+		writeInterval: config.writeInterval,
+		writeCh:       make(chan Records, MaxNumberOfBuffer),
 	}
 
 	go w.run()
@@ -111,23 +119,66 @@ func (writer *kinesisWriter) receive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (w *kinesisWriter) run() {
+	rs := make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
+	var bytes int
+
+	ticker := time.NewTicker(w.writeInterval)
+
 	for {
 		select {
+		case <-ticker.C:
+			if len(rs) > 0 {
+				w.mutex.Lock()
+				if err := w.send(rs, w.svc); err != nil {
+					logger.Error("send failed", zap.NamedError("error", err))
+				}
+				bytes = 0
+				rs = make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
+				w.mutex.Unlock()
+			}
 		case records, ok := <-w.writeCh:
 			if !ok {
+				logger.Warn("write channel closed. send current buffer")
+				if err := w.send(rs, w.svc); err != nil {
+					logger.Error("write failed", zap.NamedError("error", err))
+				}
 				return
 			}
-			if err := w.write(records, w.svc); err != nil {
-				logger.Error("write failed", zap.NamedError("error", err))
+
+			tmp, l := w.write(records)
+
+			w.mutex.Lock()
+			if len(rs) == 0 {
+				bytes += l
+				rs = append(rs, tmp...)
+				w.mutex.Unlock()
+				continue
 			}
+			if bytes+l > MaxPutRecordsSize ||
+				len(rs)+len(tmp) > MaxPutRecordsEntries {
+				logger.Debug("send",
+					zap.Int("bytes", bytes),
+					zap.Int("entries", len(rs)),
+				)
+				if err := w.send(rs, w.svc); err != nil {
+					logger.Error("send failed", zap.NamedError("error", err))
+				}
+				bytes = 0
+				rs = make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
+			}
+			bytes += l
+			rs = append(rs, tmp...)
+
+			w.mutex.Unlock()
 		}
 	}
 }
 
 var newLine = byte('\n') // for make Line-Delimited JSON
 
-func (w *kinesisWriter) write(records Records, svc *kinesis.Kinesis) error {
+func (w *kinesisWriter) write(records Records) ([]*kinesis.PutRecordsRequestEntry, int) {
 	rs := make([]*kinesis.PutRecordsRequestEntry, len(records))
+	var l int
 	for i, record := range records {
 		// json
 		j, err := json.Marshal(record)
@@ -145,9 +196,14 @@ func (w *kinesisWriter) write(records Records, svc *kinesis.Kinesis) error {
 			Data:         b.Bytes(),
 			PartitionKey: aws.String(record.Name),
 		}
+		l += b.Len()
 	}
+	return rs, l
+}
+
+func (w *kinesisWriter) send(entries []*kinesis.PutRecordsRequestEntry, svc *kinesis.Kinesis) error {
 	input := &kinesis.PutRecordsInput{
-		Records:    rs,
+		Records:    entries,
 		StreamName: aws.String(w.streamName),
 	}
 
