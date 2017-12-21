@@ -14,15 +14,6 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-type Record struct {
-	Name      string  `json:"name"`
-	Timestamp int64   `json:"time"`
-	Value     float64 `json:"value"`
-	Labels    Labels  `json:"labels"`
-}
-type Labels map[string]string
-type Records []Record
-
 var logger *zap.Logger
 
 func init() {

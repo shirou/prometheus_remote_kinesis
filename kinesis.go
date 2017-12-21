@@ -89,8 +89,14 @@ func (writer *kinesisWriter) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records := make(Records, 0, len(req.Timeseries))
-	for _, ts := range req.Timeseries {
+	records := parseRecords(req.Timeseries)
+
+	writer.writeCh <- records
+}
+
+func parseRecords(tss []*prompb.TimeSeries) Records {
+	records := make(Records, 0, len(tss)*2)
+	for _, ts := range tss {
 		var r Record
 		m := make(Labels, len(ts.Labels))
 		for _, l := range ts.Labels {
@@ -106,14 +112,15 @@ func (writer *kinesisWriter) receive(w http.ResponseWriter, r *http.Request) {
 		for _, s := range ts.Samples {
 			r2 := r
 			r2.Timestamp = s.Timestamp
-			if !math.IsNaN(s.Value) {
-				r2.Value = s.Value
+			if math.IsNaN(s.Value) {
+				r2.Value.Scan(nil)
+			} else {
+				r2.Value.Scan(s.Value)
 			}
 			records = append(records, r2)
 		}
 	}
-
-	writer.writeCh <- records
+	return records
 }
 
 func (w *kinesisWriter) close() {
