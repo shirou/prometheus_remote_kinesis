@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/json"
 	"io/ioutil"
 	"math"
@@ -182,23 +180,27 @@ func (w *kinesisWriter) write(records Records) ([]*kinesis.PutRecordsRequestEntr
 	rs := make([]*kinesis.PutRecordsRequestEntry, len(records))
 	var l int
 	for i, record := range records {
-		// json
+		// to json
 		j, err := json.Marshal(record)
 		if err != nil {
 			logger.Error("marshal error", zap.NamedError("error", err))
 			continue
 		}
+		j = append(j, newLine)
 		// compress to gzip
-		var b bytes.Buffer
-		w := gzip.NewWriter(&b)
-		w.Write(append(j, newLine))
-		w.Close()
+		/*
+			var b bytes.Buffer
+			w := gzip.NewWriter(&b)
+			w.Write(append(j, newLine))
+			w.Close()
+		*/
 
 		rs[i] = &kinesis.PutRecordsRequestEntry{
-			Data:         b.Bytes(),
+			Data:         j,
 			PartitionKey: aws.String(record.Name),
 		}
-		l += b.Len()
+		//		l += b.Len()
+		l += len(j)
 	}
 	return rs, l
 }
