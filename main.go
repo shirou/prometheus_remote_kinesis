@@ -24,6 +24,12 @@ type Server struct {
 	mux *http.ServeMux
 }
 
+type recordWriter interface {
+	receive(w http.ResponseWriter, r *http.Request)
+	close()
+	run()
+}
+
 func initLogger() {
 	level := zap.NewAtomicLevel()
 	level.SetLevel(zapcore.DebugLevel)
@@ -48,11 +54,11 @@ func initLogger() {
 	logger = l
 }
 
-func setup(writer *kinesisWriter, addr string) *http.Server {
+func setup(writer *recordWriter, addr string) *http.Server {
 	s := &Server{
 		mux: http.NewServeMux(),
 	}
-	s.mux.HandleFunc("/receive", writer.receive)
+	s.mux.HandleFunc("/receive", (*writer).receive)
 	hs := &http.Server{Addr: addr, Handler: s}
 	return hs
 }
@@ -62,6 +68,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var (
+		firehose      = flag.Bool("firehose", false, "Use Firehose")
 		streamName    = flag.String("stream-name", "", "Kinesis stream name")
 		listenAddr    = flag.String("listen-addr", ":9501", "The address to listen on.")
 		aws_region    = flag.String("region", os.Getenv("AWS_REGION"), "AWS region name")
@@ -84,9 +91,14 @@ func main() {
 
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	writer := newWriter(config)
+	var writer recordWriter
+	if *firehose {
+		writer = newFirehoseWriter(config)
+	} else {
+		writer = newWriter(config)
+	}
 
-	h := setup(writer, *listenAddr)
+	h := setup(&writer, *listenAddr)
 	go func() {
 		logger.Info(fmt.Sprintf("start http server on port %s", *listenAddr))
 		if err := h.ListenAndServe(); err != nil {
