@@ -11,33 +11,26 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/kinesis"
+	"github.com/aws/aws-sdk-go/service/firehose"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/prometheus/prometheus/prompb"
 	"go.uber.org/zap"
 )
 
-const MaxNumberOfBuffer = 1000
-const MaxPutRecordsSize = 4500000 // 5MB
-const MaxPutRecordsEntries = 500
-const DefaultAWSRegion = "ap-northeast-1"
+const MaxNumberOfFirehoseBuffer = 1000
+const MaxPutRecordBatchSize = 4500000 // 5MB
+const MaxPutRecordBatchEntries = 500
 
-type Config struct {
-	streamName    string
-	writeInterval time.Duration
-	AWSRegion     string
-}
-
-type kinesisWriter struct {
-	svc           *kinesis.Kinesis
+type firehoseWriter struct {
+	svc           *firehose.Firehose
 	writeInterval time.Duration
 	streamName    string
 	writeCh       chan Records
 	mutex         sync.Mutex
 }
 
-func newWriter(config Config) *kinesisWriter {
+func newFirehoseWriter(config Config) *firehoseWriter {
 	awsConfig := aws.NewConfig()
 	if config.AWSRegion != "" {
 		awsConfig = awsConfig.WithRegion(config.AWSRegion)
@@ -53,11 +46,11 @@ func newWriter(config Config) *kinesisWriter {
 		Config: *awsConfig,
 	}))
 
-	w := kinesisWriter{
+	w := firehoseWriter{
 		streamName:    config.streamName,
-		svc:           kinesis.New(svc),
+		svc:           firehose.New(svc),
 		writeInterval: config.writeInterval,
-		writeCh:       make(chan Records, MaxNumberOfBuffer),
+		writeCh:       make(chan Records, MaxNumberOfFirehoseBuffer),
 	}
 
 	go w.run()
@@ -65,7 +58,7 @@ func newWriter(config Config) *kinesisWriter {
 	return &w
 }
 
-func (writer *kinesisWriter) receive(w http.ResponseWriter, r *http.Request) {
+func (writer *firehoseWriter) receive(w http.ResponseWriter, r *http.Request) {
 	compressed, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		logger.Error("read failed", zap.NamedError("error", err))
@@ -92,12 +85,12 @@ func (writer *kinesisWriter) receive(w http.ResponseWriter, r *http.Request) {
 	writer.writeCh <- records
 }
 
-func (w *kinesisWriter) close() {
+func (w *firehoseWriter) close() {
 	close(w.writeCh)
 }
 
-func (w *kinesisWriter) run() {
-	rs := make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
+func (w *firehoseWriter) run() {
+	rs := make([]*firehose.Record, 0, MaxPutRecordBatchEntries)
 	var bytes int
 
 	ticker := time.NewTicker(w.writeInterval)
@@ -110,7 +103,7 @@ func (w *kinesisWriter) run() {
 				logger.Error("send failed", zap.NamedError("error", err))
 			}
 			bytes = 0
-			rs = make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
+			rs = make([]*firehose.Record, 0, MaxPutRecordBatchEntries)
 			w.mutex.Unlock()
 		case records, ok := <-w.writeCh:
 			if !ok {
@@ -130,8 +123,8 @@ func (w *kinesisWriter) run() {
 				w.mutex.Unlock()
 				continue
 			}
-			if bytes+l > MaxPutRecordsSize ||
-				len(rs)+len(tmp) > MaxPutRecordsEntries {
+			if bytes+l > MaxPutRecordBatchSize ||
+				len(rs)+len(tmp) > MaxPutRecordBatchEntries {
 				logger.Debug("send",
 					zap.Int("bytes", bytes),
 					zap.Int("entries", len(rs)),
@@ -140,7 +133,7 @@ func (w *kinesisWriter) run() {
 					logger.Error("send failed", zap.NamedError("error", err))
 				}
 				bytes = 0
-				rs = make([]*kinesis.PutRecordsRequestEntry, 0, MaxPutRecordsEntries)
+				rs = make([]*firehose.Record, 0, MaxPutRecordBatchEntries)
 			}
 			bytes += l
 			rs = append(rs, tmp...)
@@ -150,8 +143,8 @@ func (w *kinesisWriter) run() {
 	}
 }
 
-func (w *kinesisWriter) write(records Records) ([]*kinesis.PutRecordsRequestEntry, int) {
-	rs := make([]*kinesis.PutRecordsRequestEntry, len(records))
+func (w *firehoseWriter) write(records Records) ([]*firehose.Record, int) {
+	rs := make([]*firehose.Record, len(records))
 	var l int
 	for i, record := range records {
 		// to json
@@ -169,9 +162,8 @@ func (w *kinesisWriter) write(records Records) ([]*kinesis.PutRecordsRequestEntr
 			w.Close()
 		*/
 
-		rs[i] = &kinesis.PutRecordsRequestEntry{
-			Data:         j,
-			PartitionKey: aws.String(record.Name),
+		rs[i] = &firehose.Record{
+			Data: j,
 		}
 		//		l += b.Len()
 		l += len(j)
@@ -179,15 +171,15 @@ func (w *kinesisWriter) write(records Records) ([]*kinesis.PutRecordsRequestEntr
 	return rs, l
 }
 
-func (w *kinesisWriter) send(entries []*kinesis.PutRecordsRequestEntry, svc *kinesis.Kinesis) error {
+func (w *firehoseWriter) send(entries []*firehose.Record, svc *firehose.Firehose) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	input := &kinesis.PutRecordsInput{
-		Records:    entries,
-		StreamName: aws.String(w.streamName),
+	input := &firehose.PutRecordBatchInput{
+		Records:            entries,
+		DeliveryStreamName: aws.String(w.streamName),
 	}
 
-	_, err := w.svc.PutRecords(input)
+	_, err := w.svc.PutRecordBatch(input)
 	return err
 }
