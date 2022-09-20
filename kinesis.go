@@ -5,9 +5,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"sync"
+ 	"sync"
 	"time"
-
+        "fmt"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -59,7 +59,7 @@ func newWriter(config Config) *kinesisWriter {
 		writeInterval: config.writeInterval,
 		writeCh:       make(chan Records, MaxNumberOfBuffer),
 	}
-
+	fmt.Printf("record: %+v\n", w)                                                                                                                                                                           
 	go w.run()
 
 	return &w
@@ -188,6 +188,10 @@ func (w *kinesisWriter) send(entries []*kinesis.PutRecordsRequestEntry, svc *kin
 		StreamName: aws.String(w.streamName),
 	}
 
-	_, err := w.svc.PutRecords(input)
+
+	//_, err := w.svc.PutRecords(input)
+	resp, err := w.svc.PutRecords(input)
+	logger.Info(fmt.Sprintf("kinesis response: %+v\n", resp))
+	//fmt.Printf("resp: %+v\n", resp)
 	return err
 }
