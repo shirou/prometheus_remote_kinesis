@@ -1,0 +1,13 @@
+[Unit]
+Description=Entera Prometheus To Kinesis Gateway
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=60s
+EnvironmentFile=/opt/c2ro/lib/prometheus_remote_kinesis.config
+ExecStart=/opt/c2r/bin/prometheus_remote_kinesis -region $AWS_REGION -stream-name $STREAM --write-interval=60s
+
+[Install]
+WantedBy=multi-user.target
