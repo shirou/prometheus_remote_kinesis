@@ -16,6 +16,8 @@ import (
 	"github.com/golang/snappy"
 	"github.com/prometheus/prometheus/prompb"
 	"go.uber.org/zap"
+	"strconv"
+	"math/rand"
 )
 
 const MaxNumberOfBuffer = 1000
@@ -168,10 +170,11 @@ func (w *kinesisWriter) write(records Records) ([]*kinesis.PutRecordsRequestEntr
 			w.Write(append(j, newLine))
 			w.Close()
 		*/
-
+		partition := strconv.Itoa(rand.Intn(256))
+	        logger.Info(fmt.Sprintf("PartitionKey: %+v\n", partition))	
 		rs[i] = &kinesis.PutRecordsRequestEntry{
 			Data:         j,
-			PartitionKey: aws.String(record.Name),
+			PartitionKey: aws.String(partition),
 		}
 		//		l += b.Len()
 		l += len(j)
